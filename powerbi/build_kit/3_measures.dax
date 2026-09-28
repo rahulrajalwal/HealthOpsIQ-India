@@ -1,0 +1,273 @@
+// 3 · Measures (docs/POWERBI_BUILD_GUIDE.md, step 8)
+//
+// Prerequisites: the tables, the relationships and the calculated tables compare_b and _Measures.
+// Paste this whole file into a new DAX query view tab, run it once, then click
+// "Update model with changes" above DEFINE: all measures are added to _Measures.
+//
+// Afterwards set, in the Properties pane (select several measures with Ctrl+click):
+//   Format   — the measures marked FORMAT below (Measure tools → Format); everything else is fine as it is;
+//   Display folder — the FOLDER shown above each group.
+
+DEFINE
+
+    // ── FOLDER: 1 Hospitals ─────────────────────────────────────────────────
+    // Hospitals in the current filter context (after entity resolution).
+    MEASURE '_Measures'[Hospitals] = COUNTROWS ( hospital )
+    // Hospitals in view, showing 0 instead of blank when nothing matches (for number cards).
+    MEASURE '_Measures'[Hospitals in view] = [Hospitals] + 0
+    // Source records behind the hospitals in view (one hospital can rest on several records).
+    MEASURE '_Measures'[Source records] = COUNTROWS ( hospital_source_record )
+    // Hospitals with at least one record in the sources in view; responds to a source slicer.
+    MEASURE '_Measures'[Hospitals listed] = DISTINCTCOUNT ( hospital_source_record[canonical_hospital_key] )
+    // Hospitals found in a MAA Yojana (Rajasthan PM-JAY convergence) list or live search.
+    MEASURE '_Measures'[Hospitals empanelled (MAA Yojana)] = CALCULATE ( [Hospitals], hospital[maa_yojana_empanelled] = TRUE () ) + 0
+    // Share of hospitals in view found in a MAA Yojana source.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Empanelled %] = DIVIDE ( [Hospitals empanelled (MAA Yojana)], [Hospitals] )
+    // Hospitals with a candidate match waiting for a person's decision (possible duplicate).
+    MEASURE '_Measures'[Hospitals pending match review] = CALCULATE ( [Hospitals], hospital[possible_duplicate_pending_review] = TRUE () ) + 0
+    // Candidate matches for the hospitals in view (one row per hospital and candidate).
+    MEASURE '_Measures'[Possible matches] = COUNTROWS ( hospital_possible_match )
+    // Hospitals whose MAA Yojana live-search record is marked IS_SUSPENDED = YES.
+    MEASURE '_Measures'[Suspended (live search)] = CALCULATE ( [Hospitals], hospital[scheme_suspension_status] = "Suspended" ) + 0
+
+    // ── FOLDER: 2 Specialities ──────────────────────────────────────────────
+    // Hospitals with an Orthopaedics speciality in any source (source spellings kept in hospital_specialty).
+    MEASURE '_Measures'[Hospitals with Orthopaedics] = CALCULATE ( [Hospitals], hospital[has_orthopaedics] = TRUE () ) + 0
+    // Hospitals empanelled for MAA Yojana 'PMR -Phase 4' packages or recording Physical Medicine and Rehabilitation. Not physiotherapy.
+    MEASURE '_Measures'[Hospitals with PMR] = CALCULATE ( [Hospitals], hospital[has_pmr] = TRUE () ) + 0
+    // Hospitals whose source names physiotherapy explicitly (0 in Jaipur).
+    MEASURE '_Measures'[Hospitals with Physiotherapy (explicit)] = CALCULATE ( [Hospitals], hospital[has_physiotherapy] = TRUE () ) + 0
+    // What the selected standard speciality covers and deliberately excludes.
+    MEASURE '_Measures'[Selected speciality definition] = SELECTEDVALUE ( dim_specialty[definition], "Select one speciality to see what it covers and what it excludes." )
+    // Most recent evidence date of the speciality values in view.
+    MEASURE '_Measures'[Latest speciality evidence] = MAX ( hospital_specialty[as_of_date] )
+    // Sources and dates behind the speciality values in view, for subtitles.
+    MEASURE '_Measures'[Speciality evidence dates] =
+        CONCATENATEX (
+            SUMMARIZE ( hospital_specialty, hospital_specialty[as_of_date], hospital_specialty[source], hospital_specialty[as_of_label] ),
+            hospital_specialty[source] & ": " & hospital_specialty[as_of_label],
+            " · ",
+            hospital_specialty[as_of_date], ASC
+        )
+
+    // ── FOLDER: 3 Coverage ──────────────────────────────────────────────────
+    // Hospitals whose city cannot be derived from postal data (listed under '(city not derivable)').
+    MEASURE '_Measures'[Hospitals without a derived city] = CALCULATE ( [Hospitals], ISBLANK ( hospital[city_derived] ) ) + 0
+    // Share of hospitals with a derived city (India Post pincode or address keyword; see city_method).   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[City known %] = DIVIDE ( CALCULATE ( [Hospitals], NOT ISBLANK ( hospital[city_derived] ) ), [Hospitals] )
+    // Share of hospitals with a pincode that exists in the India Post directory.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Pincode known %] = DIVIDE ( CALCULATE ( [Hospitals], NOT ISBLANK ( hospital[pincode] ) ), [Hospitals] )
+    // Share of hospitals whose ownership is stated by at least one source.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Ownership known %] = DIVIDE ( CALCULATE ( [Hospitals], NOT ISBLANK ( hospital[ownership] ) ), [Hospitals] )
+    // Share of hospitals with a (non-zero) bed strength declared to the scheme.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Beds declared known %] = DIVIDE ( CALCULATE ( [Hospitals], NOT ISBLANK ( hospital[beds_declared] ) ), [Hospitals] )
+    // Share of hospitals whose NABH status is reported by the scheme list (not by NABH).   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[NABH status (scheme) known %] = DIVIDE ( CALCULATE ( [Hospitals], NOT ISBLANK ( hospital[nabh_status_scheme] ) ), [Hospitals] )
+    // Share of hospitals with any speciality value in any source.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Speciality recorded %] = DIVIDE ( CALCULATE ( [Hospitals], hospital[specialty_raw_values] > 0 ), [Hospitals] )
+    // Transparency indicator: share of six profile fields that any source provides. Not a quality score; never used to rank.   FORMAT: Percentage (0 decimals)
+    MEASURE '_Measures'[Average profile completeness] = AVERAGE ( hospital[profile_completeness] )
+    // Median bed strength declared to MAA Yojana (2021-22 lists); blank where no hospital in view declares beds.   FORMAT: Whole number (thousands separator)
+    MEASURE '_Measures'[Median beds (declared to scheme)] = MEDIAN ( hospital[beds_declared] )
+
+    // ── FOLDER: 4 Freshness ─────────────────────────────────────────────────
+    // Most recent evidence date among the hospitals in view.
+    MEASURE '_Measures'[Latest evidence date] = MAX ( hospital[latest_evidence_date] )
+    // Oldest evidence date among the hospitals in view.
+    MEASURE '_Measures'[Earliest evidence date] = MIN ( hospital[earliest_evidence_date] )
+    // Every source and as-of date behind the hospitals in view, oldest first; for page subtitles.
+    MEASURE '_Measures'[Evidence dates in view] =
+        CONCATENATEX (
+            SUMMARIZE ( hospital_source_record, hospital_source_record[as_of_date], hospital_source_record[source], hospital_source_record[as_of_label] ),
+            hospital_source_record[source] & ": " & hospital_source_record[as_of_label],
+            " · ",
+            hospital_source_record[as_of_date], ASC
+        )
+    // One-line page subtitle: each source behind the hospitals in view with the month(s) its evidence dates from.
+    MEASURE '_Measures'[Evidence dates (short)] =
+        "Evidence: "
+            & CONCATENATEX (
+                VALUES ( hospital_source_record[source] ),
+                hospital_source_record[source] & " ("
+                    & CONCATENATEX (
+                        CALCULATETABLE ( VALUES ( hospital_source_record[as_of_date] ) ),
+                        FORMAT ( hospital_source_record[as_of_date], "mmm yyyy" ),
+                        ", ",
+                        hospital_source_record[as_of_date], ASC
+                    ) & ")",
+                "  ·  ",
+                CALCULATE ( MIN ( hospital_source_record[as_of_date] ) ), ASC
+            )
+
+    // ── FOLDER: 5 Comparison ────────────────────────────────────────────────
+    // 1 when the page is filtered to one hospital (drill-through from page 1), else 0. Used as a visual filter on the Hospital A tables.
+    MEASURE '_Measures'[Hospital A is chosen] = IF ( ISFILTERED ( hospital[canonical_hospital_key] ), 1, 0 )
+    // Name, city and ID of Hospital A (the hospital the page was drilled through to); otherwise how to open the page.
+    MEASURE '_Measures'[Hospital A (selected)] =
+        IF (
+            [Hospital A is chosen] = 1 && HASONEVALUE ( hospital[canonical_hospital_key] ),
+            "Hospital A: " & SELECTEDVALUE ( hospital[hospital_name] ) & " (" & COALESCE ( SELECTEDVALUE ( hospital[city_derived] ), "city unknown" ) & ") · "
+                & SELECTEDVALUE ( hospital[canonical_hospital_key] ),
+            "Open this page from page 1: right-click a hospital in the list → Drill through → 2 Hospital details"
+        )
+    // Title for Hospital B.
+    MEASURE '_Measures'[Hospital B (selected)] = SELECTEDVALUE ( compare_b[Hospital B], "Choose hospital B" )
+    // Values of the attribute on the row for Hospital A; 'Not available in pilot sources' when no source gives one. No winner is computed.
+    MEASURE '_Measures'[Value (Hospital A)] =
+        VAR _values =
+            CONCATENATEX ( VALUES ( hospital_attribute[value_display] ), hospital_attribute[value_display], "; ", hospital_attribute[value_display], ASC )
+        RETURN
+            IF ( [Hospital A is chosen] = 1 && HASONEVALUE ( hospital[canonical_hospital_key] ), COALESCE ( _values, "Not available in pilot sources" ) )
+    // Source and as-of date behind the Hospital A values.
+    MEASURE '_Measures'[Source (Hospital A)] =
+        IF (
+            [Hospital A is chosen] = 1 && HASONEVALUE ( hospital[canonical_hospital_key] ),
+            CONCATENATEX (
+                SUMMARIZE ( hospital_attribute, hospital_attribute[source], hospital_attribute[as_of_label] ),
+                hospital_attribute[source] & " (" & hospital_attribute[as_of_label] & ")",
+                "; "
+            )
+        )
+    // Values of the attribute on the row for Hospital B; 'Not available in pilot sources' when no source gives one. No winner is computed.
+    MEASURE '_Measures'[Value (Hospital B)] =
+        VAR _key = SELECTEDVALUE ( compare_b[key_b] )
+        VAR _values =
+            CALCULATE (
+                CONCATENATEX ( VALUES ( hospital_attribute[value_display] ), hospital_attribute[value_display], "; ", hospital_attribute[value_display], ASC ),
+                REMOVEFILTERS ( hospital ), REMOVEFILTERS ( hospital_specialty ), REMOVEFILTERS ( dim_specialty ), REMOVEFILTERS ( dim_state ), REMOVEFILTERS ( source ),
+                hospital_attribute[canonical_hospital_key] = _key
+            )
+        RETURN
+            IF ( ISBLANK ( _key ), BLANK (), COALESCE ( _values, "Not available in pilot sources" ) )
+    // Source and as-of date behind the Hospital B values.
+    MEASURE '_Measures'[Source (Hospital B)] =
+        VAR _key = SELECTEDVALUE ( compare_b[key_b] )
+        RETURN
+            IF (
+                NOT ISBLANK ( _key ),
+                CALCULATE (
+                    CONCATENATEX (
+                        SUMMARIZE ( hospital_attribute, hospital_attribute[source], hospital_attribute[as_of_label] ),
+                        hospital_attribute[source] & " (" & hospital_attribute[as_of_label] & ")",
+                        "; "
+                    ),
+                    REMOVEFILTERS ( hospital ), REMOVEFILTERS ( hospital_specialty ), REMOVEFILTERS ( dim_specialty ), REMOVEFILTERS ( dim_state ), REMOVEFILTERS ( source ),
+                    hospital_attribute[canonical_hospital_key] = _key
+                )
+            )
+    // Address, derived city, district as recorded and pincode of Hospital A.
+    MEASURE '_Measures'[Location (Hospital A)] =
+        IF (
+            [Hospital A is chosen] = 1 && HASONEVALUE ( hospital[canonical_hospital_key] ),
+            COALESCE ( SELECTEDVALUE ( hospital[address] ), "Address not available" )
+                & " | City (derived): " & COALESCE ( SELECTEDVALUE ( hospital[city_derived] ), "not derivable" )
+                & " | District as recorded: " & SELECTEDVALUE ( hospital[district_source_values] )
+                & " | Pincode: " & COALESCE ( SELECTEDVALUE ( hospital[pincode] ), "not available" )
+        )
+    // Address, derived city, district as recorded and pincode of Hospital B.
+    MEASURE '_Measures'[Location (Hospital B)] =
+        VAR _key = SELECTEDVALUE ( compare_b[key_b] )
+        RETURN
+            IF (
+                NOT ISBLANK ( _key ),
+                CALCULATE (
+                    COALESCE ( LOOKUPVALUE ( hospital[address], hospital[canonical_hospital_key], _key ), "Address not available" )
+                        & " | City (derived): " & COALESCE ( LOOKUPVALUE ( hospital[city_derived], hospital[canonical_hospital_key], _key ), "not derivable" )
+                        & " | District as recorded: " & LOOKUPVALUE ( hospital[district_source_values], hospital[canonical_hospital_key], _key )
+                        & " | Pincode: " & COALESCE ( LOOKUPVALUE ( hospital[pincode], hospital[canonical_hospital_key], _key ), "not available" ),
+                    REMOVEFILTERS ( hospital ), REMOVEFILTERS ( hospital_specialty ), REMOVEFILTERS ( dim_specialty ), REMOVEFILTERS ( dim_state ), REMOVEFILTERS ( source )
+                )
+            )
+
+    // ── FOLDER: 6 Terminology ───────────────────────────────────────────────
+    // Packages the MAA Yojana search page lists under 'PMR -Phase 4'.
+    MEASURE '_Measures'[PMR packages] = COUNTROWS ( pmr_package )
+    // PMR packages whose displayed name mentions rehabilitation.
+    MEASURE '_Measures'[PMR packages mentioning rehabilitation] = CALCULATE ( [PMR packages], pmr_package[mentions_rehabilitation] = TRUE () ) + 0
+    // PMR packages whose displayed name mentions physiotherapy.
+    MEASURE '_Measures'[PMR packages mentioning physiotherapy] = CALCULATE ( [PMR packages], pmr_package[mentions_physiotherapy] = TRUE () ) + 0
+    // PMR packages whose displayed name marks them as reserved for government hospitals.
+    MEASURE '_Measures'[PMR packages reserved for government] = CALCULATE ( [PMR packages], pmr_package[marked_government_reserve] = TRUE () ) + 0
+
+    // ── FOLDER: 7 Context ───────────────────────────────────────────────────
+    // Official state-level indicator value for the states in view (each indicator has its own reference date).   FORMAT: Whole number (thousands separator)
+    MEASURE '_Measures'[State indicator value] = SUM ( state_context[value] )
+    // The India total the source table gives for the indicator in view (blank where the source gives none).   FORMAT: Whole number (thousands separator)
+    MEASURE '_Measures'[India total (context)] = CALCULATE ( SUM ( state_context[value] ), REMOVEFILTERS ( dim_state ), state_context[geography_level] = "India total" )
+    // State value as a share of the India total of the same indicator and source table.   FORMAT: Percentage (1 decimal)
+    MEASURE '_Measures'[Share of India] = DIVIDE ( [State indicator value], [India total (context)] )
+
+    // ── FOLDER: 8 Data quality ──────────────────────────────────────────────
+    // Data-quality checks of the build.
+    MEASURE '_Measures'[Checks] = COUNTROWS ( check_result )
+    // Rules that hold.
+    MEASURE '_Measures'[Checks passed] = CALCULATE ( COUNTROWS ( check_result ), check_result[status] = "pass" ) + 0
+    // Rules that are broken (the build fails if any).
+    MEASURE '_Measures'[Checks failed] = CALCULATE ( COUNTROWS ( check_result ), check_result[status] = "fail" ) + 0
+    // Known source issues worth telling users about.
+    MEASURE '_Measures'[Checks warned] = CALCULATE ( COUNTROWS ( check_result ), check_result[status] = "warn" ) + 0
+    // Measurements reported without a judgement.
+    MEASURE '_Measures'[Checks info] = CALCULATE ( COUNTROWS ( check_result ), check_result[status] = "info" ) + 0
+    // One-line summary of the build's data-quality checks.
+    MEASURE '_Measures'[Quality summary] =
+        FORMAT ( [Checks passed], "0" ) & " pass · " & FORMAT ( [Checks failed], "0" ) & " fail · "
+            & FORMAT ( [Checks warned], "0" ) & " warn · " & FORMAT ( [Checks info], "0" ) & " info"
+    // Font colour for the status column on the dark report background (Conditional formatting → Font colour → Field value). The status word stays visible.
+    MEASURE '_Measures'[Status colour] =
+        SWITCH (
+            SELECTEDVALUE ( check_result[status] ),
+            "pass", "#0ca30c",
+            "warn", "#fab219",
+            "fail", "#e66767",
+            "#c3c2b7"
+        )
+
+    // ── FOLDER: 9 Labels ────────────────────────────────────────────────────
+    // Pipeline build shown on every page (UTC timestamp and source fingerprint).
+    MEASURE '_Measures'[Build] = MAX ( hospital[build_id] )
+    // Dynamic title: the location and speciality selected, with the number of hospitals.
+    MEASURE '_Measures'[Selection title] =
+        -- Location is read with the speciality filter removed, so an empty result still names its place.
+        VAR _state = CALCULATE ( SELECTEDVALUE ( hospital[state_name], "Several states" ), REMOVEFILTERS ( dim_specialty ), REMOVEFILTERS ( hospital_specialty ) )
+        VAR _district = CALCULATE ( SELECTEDVALUE ( hospital[district_group], "several districts" ), REMOVEFILTERS ( dim_specialty ), REMOVEFILTERS ( hospital_specialty ) )
+        VAR _city =
+            IF (
+                ISFILTERED ( hospital[city_display] ),
+                IF ( COUNTROWS ( FILTERS ( hospital[city_display] ) ) = 1, MAXX ( FILTERS ( hospital[city_display] ), hospital[city_display] ), "several cities" ),
+                "all cities"
+            )
+        VAR _speciality =
+            IF (
+                ISFILTERED ( dim_specialty[specialty_standardized] ),
+                IF (
+                    COUNTROWS ( FILTERS ( dim_specialty[specialty_standardized] ) ) = 1,
+                    MAXX ( FILTERS ( dim_specialty[specialty_standardized] ), dim_specialty[specialty_standardized] ),
+                    "several specialities"
+                ),
+                "all specialities"
+            )
+        RETURN
+            _state & " › " & _district & " › " & _city & " › " & _speciality & "  ·  " & FORMAT ( [Hospitals] + 0, "#,0" ) & " hospitals"
+    // Explains an empty result instead of showing a blank page (e.g. Physiotherapy in Jaipur); empty text otherwise, so the card stays clean.
+    MEASURE '_Measures'[Empty result message] =
+        IF (
+            ISBLANK ( [Hospitals] ),
+            IF (
+                SELECTEDVALUE ( dim_specialty[specialty_standardized] ) = "Physiotherapy",
+                "No source for this area names physiotherapy. Physical Medicine and Rehabilitation (PMR) is a related but different speciality: select it to see the scheme's evidence.",
+                "No hospital in the pilot sources matches this selection."
+            ),
+            ""
+        )
+
+// A quick look once the measures exist. Expected: 769 · 826 · 395 · 229 · 86 · 0 · 229
+EVALUATE
+ROW (
+    "Hospitals", [Hospitals],
+    "Source records", [Source records],
+    "Empanelled", [Hospitals empanelled (MAA Yojana)],
+    "Orthopaedics", [Hospitals with Orthopaedics],
+    "PMR", [Hospitals with PMR],
+    "Physiotherapy (explicit)", [Hospitals with Physiotherapy (explicit)],
+    "Pending match review", [Hospitals pending match review]
+)

@@ -1,0 +1,40 @@
+{
+  "name": "HealthOpsIQ India (dark)",
+  "dataColors": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+  "foreground": "#ffffff",
+  "foregroundNeutralSecondary": "#c3c2b7",
+  "foregroundNeutralTertiary": "#898781",
+  "background": "#1a1a19",
+  "backgroundLight": "#2c2c2a",
+  "backgroundNeutral": "#383835",
+  "tableAccent": "#3987e5",
+  "good": "#0ca30c",
+  "neutral": "#fab219",
+  "bad": "#e66767",
+  "maximum": "#86b6ef",
+  "center": "#3987e5",
+  "minimum": "#1c5cab",
+  "null": "#898781",
+  "hyperlink": "#86b6ef",
+  "visitedHyperlink": "#9085e9",
+  "textClasses": {
+    "callout": { "fontSize": 28, "fontFace": "Segoe UI Semibold", "color": "#ffffff" },
+    "title": { "fontSize": 13, "fontFace": "Segoe UI Semibold", "color": "#ffffff" },
+    "header": { "fontSize": 13, "fontFace": "Segoe UI Semibold", "color": "#ffffff" },
+    "label": { "fontSize": 12, "fontFace": "Segoe UI", "color": "#e6e5df" }
+  },
+  "visualStyles": {
+    "*": {
+      "*": {
+        "background": [{ "show": false }],
+        "border": [{ "show": false }],
+        "dropShadow": [{ "show": false }],
+        "title": [{ "show": true, "fontColor": { "solid": { "color": "#ffffff" } }, "fontSize": 13, "fontFamily": "Segoe UI Semibold", "alignment": "left" }],
+        "valueAxis": [{ "gridlineShow": true, "gridlineColor": { "solid": { "color": "#3a3450" } }, "gridlineStyle": "solid", "gridlineThickness": 1, "labelColor": { "solid": { "color": "#c3c2b7" } }, "fontSize": 11 }],
+        "categoryAxis": [{ "labelColor": { "solid": { "color": "#e6e5df" } }, "fontSize": 11 }],
+        "legend": [{ "show": true, "position": "Top", "labelColor": { "solid": { "color": "#e6e5df" } }, "fontSize": 11 }],
+        "labels": [{ "color": { "solid": { "color": "#ffffff" } }, "fontSize": 11 }]
+      }
+    }
+  }
+}

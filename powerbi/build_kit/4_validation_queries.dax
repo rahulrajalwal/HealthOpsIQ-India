@@ -1,0 +1,254 @@
+// 4 · Validation queries (docs/POWERBI_BUILD_GUIDE.md, step 9)
+// Run each block in DAX query view (select it, then Run). Expected values are in the comments and come
+// from the SQL build (docs/SQL_ANALYSIS.md). A difference means a relationship or a measure is wrong.
+
+// ════════ 01 Model integrity ════════
+// 01 · Model integrity
+// Run after every refresh. Row counts must equal the Parquet exports of the build
+// (reports/build_manifest.json → exported_rows), and every relationship must find its dimension row.
+
+// Q1. Rows per table. Expected (build of 27-09-2026):
+//   hospital 769 · dim_state 36 · dim_specialty 3 · dim_attribute 9 · source 14 · hospital_attribute 6,207
+//   hospital_specialty 3,720 · hospital_source_record 826 · hospital_possible_match 300 · state_context 286
+//   pmr_package 64 · check_result 53
+EVALUATE
+{
+    ( "hospital", COUNTROWS ( hospital ) ),
+    ( "dim_state", COUNTROWS ( dim_state ) ),
+    ( "dim_specialty", COUNTROWS ( dim_specialty ) ),
+    ( "dim_attribute", COUNTROWS ( dim_attribute ) ),
+    ( "source", COUNTROWS ( source ) ),
+    ( "hospital_attribute", COUNTROWS ( hospital_attribute ) ),
+    ( "hospital_specialty", COUNTROWS ( hospital_specialty ) ),
+    ( "hospital_source_record", COUNTROWS ( hospital_source_record ) ),
+    ( "hospital_possible_match", COUNTROWS ( hospital_possible_match ) ),
+    ( "state_context", COUNTROWS ( state_context ) ),
+    ( "pmr_package", COUNTROWS ( pmr_package ) ),
+    ( "check_result", COUNTROWS ( check_result ) )
+}
+
+// Q2. Rows that do not find their dimension row. Expected: 0 everywhere
+// (the SQL checks REL-01 … REL-11 assert the same before the files are written).
+EVALUATE
+ROW (
+    "hospital_attribute → hospital", COUNTROWS ( FILTER ( hospital_attribute, ISBLANK ( RELATED ( hospital[hospital_name] ) ) ) ) + 0,
+    "hospital_attribute → dim_attribute", COUNTROWS ( FILTER ( hospital_attribute, ISBLANK ( RELATED ( dim_attribute[attribute_label] ) ) ) ) + 0,
+    "hospital_attribute → source", COUNTROWS ( FILTER ( hospital_attribute, ISBLANK ( RELATED ( source[source] ) ) ) ) + 0,
+    "hospital_specialty → hospital", COUNTROWS ( FILTER ( hospital_specialty, ISBLANK ( RELATED ( hospital[hospital_name] ) ) ) ) + 0,
+    "hospital_source_record → hospital", COUNTROWS ( FILTER ( hospital_source_record, ISBLANK ( RELATED ( hospital[hospital_name] ) ) ) ) + 0,
+    "hospital_source_record → source", COUNTROWS ( FILTER ( hospital_source_record, ISBLANK ( RELATED ( source[source] ) ) ) ) + 0,
+    "hospital_possible_match → hospital", COUNTROWS ( FILTER ( hospital_possible_match, ISBLANK ( RELATED ( hospital[hospital_name] ) ) ) ) + 0,
+    "hospital → dim_state", COUNTROWS ( FILTER ( hospital, ISBLANK ( RELATED ( dim_state[state_name] ) ) ) ) + 0,
+    "pmr_package → dim_specialty", COUNTROWS ( FILTER ( pmr_package, ISBLANK ( RELATED ( dim_specialty[specialty_family] ) ) ) ) + 0
+)
+
+// Q3. Speciality rows without a standard name are expected: the pilot standardises only its own
+// specialities and keeps every other raw value. Expected: 3,354 of 3,720 rows.
+EVALUATE
+ROW (
+    "Speciality rows", COUNTROWS ( hospital_specialty ),
+    "Without a standard name", COUNTROWS ( FILTER ( hospital_specialty, ISBLANK ( hospital_specialty[specialty_standardized] ) ) )
+)
+
+// ════════ 02 Overview KPIs ════════
+// 02 · Overview KPIs (page 1)
+// The same numbers as docs/SQL_ANALYSIS.md; a difference means the model or a measure is wrong.
+
+// Q1. Headline cards. Expected: 769 hospitals · 826 source records · 395 empanelled (51.4%) ·
+//     229 Orthopaedics · 86 PMR · 0 physiotherapy (explicit) · 229 pending match review · 0 suspended ·
+//     189 without a derived city
+EVALUATE
+ROW (
+    "Hospitals", [Hospitals in view],
+    "Without a derived city", [Hospitals without a derived city],
+    "Source records", [Source records],
+    "Empanelled (MAA Yojana)", [Hospitals empanelled (MAA Yojana)],
+    "Empanelled %", [Empanelled %],
+    "With Orthopaedics", [Hospitals with Orthopaedics],
+    "With PMR", [Hospitals with PMR],
+    "With Physiotherapy (explicit)", [Hospitals with Physiotherapy (explicit)],
+    "Pending match review", [Hospitals pending match review],
+    "Suspended (live search)", [Suspended (live search)]
+)
+
+// Q2. Hospitals by the sources that list them (sql/analysis/a07_source_overlap.sql).
+//     Expected: NHD only 374 · MAA Yojana list only 275 · live search only 65 ·
+//     list + NHD 34 · list + live search 21
+EVALUATE
+SUMMARIZECOLUMNS ( hospital[source_combination], "Hospitals", [Hospitals] )
+ORDER BY [Hospitals] DESC
+
+// Q3. Hospitals by their most recent evidence (a08). Expected: 2016 · NHD 374 ·
+//     2022 · MAA Yojana district list 309 · 2026 · MAA Yojana live search 86
+EVALUATE
+SUMMARIZECOLUMNS ( hospital[latest_evidence], "Hospitals", [Hospitals] )
+ORDER BY hospital[latest_evidence]
+
+// Q4. Ownership, with unknown kept as its own group. Expected: Private 275 · Public 134 · (blank) 360
+EVALUATE
+SUMMARIZECOLUMNS ( hospital[ownership], "Hospitals", [Hospitals] )
+ORDER BY [Hospitals] DESC
+
+// Q5. Rajasthan in official context (a11). Expected: AB PM-JAY empanelled hospitals 1,904 of 30,957 (6.2%);
+//     government hospitals (total) 2,849 of 41,245 (6.9%); NABH-accredited hospitals 340 (no India total in that table).
+EVALUATE
+SUMMARIZECOLUMNS (
+    state_context[indicator_label],
+    TREATAS ( { "Rajasthan" }, dim_state[state_name] ),
+    "Rajasthan", [State indicator value],
+    "India total", [India total (context)],
+    "Share of India", [Share of India]
+)
+ORDER BY state_context[indicator_label]
+
+// ════════ 03 Location and speciality filters ════════
+// 03 · Location and speciality filters (pages 2 and 5)
+
+// Q1. Location funnel: district as recorded by the sources → derived city (sql/analysis/a01_location_funnel.sql).
+//     Expected top rows: Jaipur/Jaipur 432 (69 Orthopaedics, 8 PMR) · Jaipur/(city not derivable) 189 (107, 48) ·
+//     Jaipur/Chomu 34 (13, 2) · Jaipur/Shahpura 23 (3, 5) · Jaipur/Kotputli 21 (7, 1)
+EVALUATE
+SUMMARIZECOLUMNS (
+    hospital[district_group],
+    hospital[city_display],
+    "Hospitals", [Hospitals],
+    "With Orthopaedics", [Hospitals with Orthopaedics],
+    "With PMR", [Hospitals with PMR]
+)
+ORDER BY [Hospitals] DESC
+
+// Q2. The speciality slicer filters hospitals through the two-way bridge (a02).
+//     Expected: Orthopaedics · Private 173 · Public 56; PMR · Public 86; Physiotherapy returns no rows.
+EVALUATE
+SUMMARIZECOLUMNS (
+    dim_specialty[specialty_standardized],
+    hospital[ownership],
+    "Hospitals", [Hospitals]
+)
+ORDER BY dim_specialty[specialty_standardized], hospital[ownership]
+
+// Q3. Orthopaedics by ownership, as page 2 shows it (a02).
+//     Expected: Private 173 (173 empanelled, 71 without a city, median 40 beds) ·
+//               Public 56 (56 empanelled, 36 without a city, median 50 beds) ·
+//               and a row with blank ownership showing 0: no Orthopaedics hospital has unknown ownership.
+EVALUATE
+SUMMARIZECOLUMNS (
+    hospital[ownership],
+    TREATAS ( { "Orthopaedics" }, dim_specialty[specialty_standardized] ),
+    "Hospitals", [Hospitals],
+    "Empanelled", [Hospitals empanelled (MAA Yojana)],
+    "City not derivable", CALCULATE ( [Hospitals], ISBLANK ( hospital[city_derived] ) ),
+    "Median beds", [Median beds (declared to scheme)]
+)
+
+// Q4. The dynamic title and the empty-result message for Physiotherapy in Jaipur city.
+//     Expected: title "Rajasthan › Jaipur › Jaipur › Physiotherapy  ·  0 hospitals" and the physiotherapy message.
+EVALUATE
+CALCULATETABLE (
+    ROW ( "Title", [Selection title], "Message", [Empty result message] ),
+    TREATAS ( { "Physiotherapy" }, dim_specialty[specialty_standardized] ),
+    TREATAS ( { "Jaipur" }, hospital[city_display] )
+)
+
+// Q5. Terminology evidence behind PMR (a04). Expected: 64 packages · 48 mention rehabilitation ·
+//     0 mention physiotherapy · 25 reserved for government hospitals
+EVALUATE
+ROW (
+    "PMR packages", [PMR packages],
+    "Mention rehabilitation", [PMR packages mentioning rehabilitation],
+    "Mention physiotherapy", [PMR packages mentioning physiotherapy],
+    "Reserved for government", [PMR packages reserved for government]
+)
+
+// ════════ 04 Hospital comparison ════════
+// 04 · Hospital details and comparison (page 2)
+// Hospital A is the hospital the page is drilled through to (a filter on hospital[canonical_hospital_key]);
+// Hospital B comes from the compare_b selector. Reproduces sql/analysis/a06_compare_two_hospitals.sql:
+// the first hospital (by name) that two sources confirm, against the first private Orthopaedics hospital
+// that declares beds.
+// Expected: A = AGARWAL HOSPITAL AND MATERNITY CENTRE (MAA Yojana list 2022 + NHD 2016),
+//           B = AAROGYA HOSPITAL (Kotputli; MAA Yojana list 2022).
+// Rows: Listed in source · Ownership (Private | Private) · Facility type (Not available | Not available) ·
+//       Government level (Not available | Not available) · MAA Yojana empanelment · suspension status (Not available) ·
+//       NABH status (Not NABH accredited, as reported | same) · Beds (30 beds | 15 beds) · Speciality lists.
+
+DEFINE
+    VAR _a =
+        SELECTCOLUMNS (
+            TOPN ( 1, FILTER ( hospital, hospital[has_orthopaedics] && hospital[source_count] >= 2 ), hospital[hospital_name], ASC ),
+            "key", hospital[canonical_hospital_key]
+        )
+    VAR _b =
+        SELECTCOLUMNS (
+            TOPN ( 1, FILTER ( hospital, hospital[has_orthopaedics] && hospital[ownership] = "Private" && NOT ISBLANK ( hospital[beds_declared] ) ), hospital[hospital_name], ASC ),
+            "key", hospital[canonical_hospital_key]
+        )
+
+// Q1. The comparison matrix: one row per attribute, no winner.
+EVALUATE
+SUMMARIZECOLUMNS (
+    dim_attribute[sort_order],
+    dim_attribute[attribute_label],
+    TREATAS ( _a, hospital[canonical_hospital_key] ),
+    TREATAS ( _b, compare_b[key_b] ),
+    "Hospital A", [Value (Hospital A)],
+    "Source A", [Source (Hospital A)],
+    "Hospital B", [Value (Hospital B)],
+    "Source B", [Source (Hospital B)]
+)
+ORDER BY dim_attribute[sort_order]
+
+// Q2. The two location cards.
+EVALUATE
+CALCULATETABLE (
+    ROW ( "A", [Hospital A (selected)], "Location A", [Location (Hospital A)], "B", [Hospital B (selected)], "Location B", [Location (Hospital B)] ),
+    TREATAS ( _a, hospital[canonical_hospital_key] ),
+    TREATAS ( _b, compare_b[key_b] )
+)
+
+// ════════ 05 Coverage and quality ════════
+// 05 · Coverage, provenance and data quality (page 6)
+
+// Q1. How much the sources tell us. Expected: city 75.4% · pincode 54.1% · ownership 53.2% ·
+//     declared beds 42.7% · NABH status reported by the scheme 42.7% · any speciality 51.5% ·
+//     average profile completeness 47%
+EVALUATE
+ROW (
+    "City known %", [City known %],
+    "Pincode known %", [Pincode known %],
+    "Ownership known %", [Ownership known %],
+    "Beds declared known %", [Beds declared known %],
+    "NABH status (scheme) known %", [NABH status (scheme) known %],
+    "Speciality recorded %", [Speciality recorded %],
+    "Average profile completeness", [Average profile completeness]
+)
+
+// Q2. Records and hospitals per source (a09). Expected: National Hospital Directory 408 / 408 ·
+//     MAA Yojana district list 332 / 330 · MAA Yojana live search 86 / 86
+EVALUATE
+SUMMARIZECOLUMNS (
+    source[source],
+    source[reference_period],
+    "Source records", [Source records],
+    "Hospitals listed", [Hospitals listed]
+)
+ORDER BY [Source records] DESC
+
+// Q3. How each city was derived (GEO-06). Expected: india_post_city_division 358 · address_keyword 167 ·
+//     india_post_single_delivery_office 55 · (blank: not derivable) 189
+EVALUATE
+SUMMARIZECOLUMNS ( hospital[city_method], "Hospitals", [Hospitals] )
+ORDER BY [Hospitals] DESC
+
+// Q4. Data-quality checks. Expected: 53 checks · 31 pass · 0 fail · 3 warn · 19 info
+EVALUATE
+ROW ( "Checks", [Checks], "Summary", [Quality summary] )
+
+EVALUATE
+SUMMARIZECOLUMNS ( check_result[area], check_result[status], "Checks", [Checks] )
+ORDER BY check_result[area], check_result[status]
+
+// Q5. Evidence dates behind everything in view (subtitle measure).
+EVALUATE
+ROW ( "Evidence dates in view", [Evidence dates in view], "Build", [Build] )
+
